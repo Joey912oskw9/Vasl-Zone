@@ -1,44 +1,78 @@
-import json, uuid, time, subprocess
-from fastapi import FastAPI, Request
+import json, uuid, time, os
+from fastapi import FastAPI
 import gradio as gr
-from xray_config import generate_config
 
 app = FastAPI()
-users_db = {}  # In-memory DB
+DATA_FILE = "data.json"
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {"groups": {}, "users": []}
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
 
 def create_configs(protocols, count, port, expiry, group, volume):
-    user_id = str(uuid.uuid4())
-    config = generate_config(protocols, user_id)
-    subprocess.run(["pkill", "xray"], stderr=subprocess.DEVNULL)
-    with open("/etc/xray/config.json", "w") as f:
-        json.dump(config, f)
-    subprocess.Popen(["/usr/bin/xray", "-c", "/etc/xray/config.json"])
-    return "\n".join([f"vless://{user_id}@localhost:{port}?..." for _ in range(count)])  # Example
+    data = load_data()
+    output_lines = []
+    
+    if group not in data["groups"]:
+        data["groups"][group] = []
 
+    for _ in range(int(count)):
+        user_id = str(uuid.uuid4())  # هر بار یک UUID جدید و خودکار می‌سازه
+        
+        # ساخت لینک شبیه‌سازی‌شده (اینجا می‌تونی آدرس سرور واقعیت رو بزنی)
+        link = f"vless://{user_id}@YOUR_SERVER_IP:{port}?encryption=none&security=auto&type=ws&path=/vless#{group}"
+        output_lines.append(link)
+        
+        data["groups"][group].append(user_id)
+        data["users"].append({
+            "id": user_id,
+            "group": group,
+            "expiry": expiry,
+            "volume": volume,
+            "protocols": protocols
+        })
+    
+    save_data(data)
+    return "\n".join(output_lines)  # هر کانفیگ در یک خط جدا
+
+# ---------- بخش رابط کاربری Gradio ----------
 def panel_ui():
-    with gr.Blocks(theme=gr.themes.Soft()) as demo:
-        gr.Markdown("# Premium VPN Panel")
+    with gr.Blocks(theme=gr.themes.Soft(), title="Premium Panel") as demo:
+        gr.Markdown("# 🚀 پنل مدیریت فروش کانفیگ")
+        
         with gr.Row():
-            protocols = gr.CheckboxGroup(["vless+ws", "grpc"], label="Protocols", value=["vless+ws"])
-            count = gr.Number(label="Number of Configs", value=10, precision=0)
-            port = gr.Number(label="Port", value=443, precision=0)
-            expiry = gr.Textbox(label="Expiry (YYYY-MM-DD)")
-            group = gr.Textbox(label="Group Name", value="VIP")
-            volume = gr.Number(label="Volume (GB)", value=100, precision=0)
-        generate_btn = gr.Button("Generate Configs")
-        output = gr.Textbox(label="Configs Output", lines=10)
-        generate_btn.click(create_configs, inputs=[protocols, count, port, expiry, group, volume], outputs=output)
-        gr.Markdown("### Public Page: [Subscription Link](/public_page)")
+            protocols = gr.CheckboxGroup(
+                ["vless+ws", "grpc", "shadowtls"], 
+                label="پروتکل‌ها (چندتا رو هم‌زمان انتخاب کن)", 
+                value=["vless+ws"]
+            )
+            count = gr.Number(label="تعداد کانفیگ", value=10, precision=0)
+            port = gr.Number(label="پورت سرور (مثلاً 443)", value=443, precision=0)
+        
+        with gr.Row():
+            expiry = gr.Textbox(label="تاریخ انقضا (مثلاً 2026-12-31)")
+            group = gr.Textbox(label="نام گروه (مثلاً VIP)", value="VIP")
+            volume = gr.Number(label="حجم (گیگابایت)", value=100, precision=0)
+
+        generate_btn = gr.Button("🔥 ساخت کانفیگ‌های گروهی")
+        output = gr.Textbox(label="لیست کانفیگ‌ها (همه در یک پیام)", lines=15)
+        
+        generate_btn.click(
+            create_configs, 
+            inputs=[protocols, count, port, expiry, group, volume], 
+            outputs=output
+        )
+        
+        gr.Markdown("---")
+        gr.Markdown("🔗 **لینک ساب‌اسکریپشن اختصاصی:** `/public_page?group=VIP` (بعداً شخصی‌سازی کن)")
     return demo
 
-@app.get("/public_page")
-async def public_page():
-    return """
-    <html><body><h1>Subscription Links</h1>
-    <pre>vless://... configs here</pre>
-    </body></html>"""
-
-if __name__ == "__main__":
-    demo = panel_ui()
-    demo.queue()
-    demo.launch(server_name="0.0.0.0", server_port=7860)  # Must be port 7860
+# اتصال Gradio به FastAPI در مسیر اصلی (Root)
+demo = panel_ui()
+app = gr.mount_gradio_app(app, demo, path="/")
